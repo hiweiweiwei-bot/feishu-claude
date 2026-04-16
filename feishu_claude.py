@@ -372,7 +372,10 @@ class API:
                 headers=self._headers(),
                 params={"query": query, "count": 20, "offset": 0},
             )
-        return resp.json().get("data", {}).get("docs_entities", [])
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data.get("data", {}).get("docs_entities", [])
 
     # ── 消息 ─────────────────────────────────────
     def send_message(
@@ -423,9 +426,10 @@ class API:
                 f"/{spreadsheet_token}/values/{sheet_id}!{range_}",
                 headers=self._headers(),
             )
-        return (
-            resp.json().get("data", {}).get("valueRange", {}).get("values", [])
-        )
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data.get("data", {}).get("valueRange", {}).get("values", [])
 
     def write_sheet(
         self,
@@ -452,7 +456,10 @@ class API:
                     }
                 },
             )
-        return resp.json()
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data
 
     # ── Bitable ───────────────────────────────────
     def query_records(
@@ -505,7 +512,10 @@ class API:
                 headers=self._headers(),
                 params=params,
             )
-        return resp.json().get("data", {})
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data.get("data", {})
 
     def update_okr_progress(
         self,
@@ -545,7 +555,10 @@ class API:
                     },
                 },
             )
-        return resp.json()
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data
 
     def add_okr_comment(self, okr_id: str, comment: str) -> dict:
         import httpx
@@ -576,7 +589,10 @@ class API:
                     }
                 },
             )
-        return resp.json()
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data
 
     # ── 通用工具（全量兜底）──────────────────────
     def feishu_api(self, module: str, method: str, params: dict) -> dict:
@@ -617,4 +633,7 @@ class API:
                 resp = client.request(
                     http_method, url, headers=self._headers(), json=params
                 )
-        return resp.json()
+        data = resp.json()
+        if resp.status_code != 200 or data.get("code", 0) != 0:
+            raise RuntimeError(f"API 调用失败：{data}")
+        return data
