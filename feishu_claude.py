@@ -105,7 +105,7 @@ class Memory:
 # Auth
 # ─────────────────────────────────────────────
 
-import time, threading, webbrowser, urllib.parse
+import time, warnings, webbrowser, urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import httpx
 
@@ -156,9 +156,18 @@ class Auth:
         return {}
 
     def _save_tokens(self):
-        with open(TOKEN_PATH, "w") as f:
-            json.dump(self._tokens, f, indent=2)
-        os.chmod(TOKEN_PATH, 0o600)
+        tmp = TOKEN_PATH + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(self._tokens, f, indent=2)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, TOKEN_PATH)  # POSIX 原子操作
+        except OSError as e:
+            warnings.warn(f"token 持久化失败（本次会话仍有效）：{e}")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     # ── OAuth2 用户授权 ──────────────────────────
     def do_oauth(self):
@@ -174,7 +183,8 @@ class Auth:
         server.auth_code = None
         print(f"\n正在打开浏览器授权，若未自动打开请手动访问：\n{auth_url}\n")
         webbrowser.open(auth_url)
-        server.handle_request()
+        while not server.auth_code:
+            server.handle_request()
         code = server.auth_code
         if not code:
             raise RuntimeError("未获取到授权码，请重试")
@@ -205,6 +215,8 @@ class Auth:
         self._save_tokens()
 
     def _refresh_user_token(self):
+        if not self._tokens.get("refresh_token"):
+            raise RuntimeError("refresh_token 不存在，请重新执行 OAuth2 授权")
         with self._http() as client:
             resp = client.post(
                 "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
