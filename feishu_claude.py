@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """feishu-claude: 飞书 x Claude Code 双模工具（MCP Server + ChatBot）"""
 
-import json, os, sys, argparse
+import json, os
 from pathlib import Path
 
 # ─────────────────────────────────────────────
@@ -25,15 +25,15 @@ class Config:
         if os.path.exists(self.path):
             with open(self.path) as f:
                 data = json.load(f)
-            self.app_id = data.get("app_id", "")
-            self.app_secret = data.get("app_secret", "")
-            self.proxy = data.get("proxy", "")
-            self.work_dir = data.get("work_dir", DEFAULT_WORK_DIR)
-            self.bot_name = data.get("bot_name", "飞书助手")
-            self.bot_intro = data.get("bot_intro", "Claude Code AI 助手")
+            self.app_id = data.get("app_id", self.app_id)
+            self.app_secret = data.get("app_secret", self.app_secret)
+            self.proxy = data.get("proxy", self.proxy)
+            self.work_dir = data.get("work_dir", self.work_dir)
+            self.bot_name = data.get("bot_name", self.bot_name)
+            self.bot_intro = data.get("bot_intro", self.bot_intro)
 
     def save(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w") as f:
             json.dump({
                 "app_id": self.app_id,

@@ -21,11 +21,8 @@ def test_config_save_and_load(tmp_path):
     assert cfg2.app_secret == "secret_test"
 
 def test_config_work_dir_created(tmp_path):
-    work = str(tmp_path / "mybot")
     cfg = Config(path=str(tmp_path / "config.json"))
-    cfg.work_dir = work
-    cfg.save()
-    cfg2 = Config(path=str(tmp_path / "config.json"))
-    cfg2.ensure_dirs()
-    assert os.path.isdir(os.path.join(work, "workspace", "groups"))  # 嵌套结构
-    assert os.path.isdir(os.path.join(work, "workspace"))            # 父目录
+    cfg.work_dir = str(tmp_path / "mybot")
+    cfg.ensure_dirs()
+    assert os.path.isdir(os.path.join(cfg.work_dir, "workspace", "groups"))
+    assert os.path.isdir(os.path.join(cfg.work_dir, "workspace"))
