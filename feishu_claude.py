@@ -717,3 +717,125 @@ def run_mcp_server():
         return api.feishu_api(module, method, params)
 
     mcp.run()
+
+
+# ─────────────────────────────────────────────
+# Bot 模式（WebSocket ChatBot）
+# ─────────────────────────────────────────────
+
+import subprocess
+import shutil
+import threading
+
+
+def run_bot():
+    cfg = Config()
+    workspace = os.path.join(cfg.work_dir, "workspace")
+    cfg.ensure_dirs()
+
+    def call_claude(system_prompt: str, history: list, user_msg: str) -> str:
+        claude_bin = shutil.which("claude")
+        if not claude_bin:
+            return "❌ 未找到 claude 命令，请确认 Claude Code CLI 已安装"
+        messages = history + [{"role": "user", "content": user_msg}]
+        prompt_parts = []
+        if system_prompt:
+            prompt_parts.append(f"<system>\n{system_prompt}\n</system>\n")
+        for m in messages:
+            role = "Human" if m["role"] == "user" else "Assistant"
+            prompt_parts.append(f"{role}: {m['content']}")
+        full_prompt = "\n".join(prompt_parts)
+        env = os.environ.copy()
+        if cfg.proxy:
+            env["HTTPS_PROXY"] = cfg.proxy
+        try:
+            result = subprocess.run(
+                [claude_bin, "-p", full_prompt, "--output-format", "text"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+            return result.stdout.strip() or result.stderr.strip() or "（无回复）"
+        except subprocess.TimeoutExpired:
+            return "⏱ 回复超时（120秒），请重试"
+        except Exception as e:
+            return f"❌ 调用 Claude 失败：{e}"
+
+    def handle_message(chat_id: str, sender_id: str, text: str, is_group: bool):
+        mem = Memory(workspace, chat_id)
+        system_prompt = mem.build_system_prompt()
+        reply = call_claude(system_prompt, mem.history, text)
+        auth = Auth(cfg.app_id, cfg.app_secret, cfg.proxy)
+        api = API(auth)
+        try:
+            api.send_message(chat_id, reply)
+        except Exception as e:
+            print(f"发送失败：{e}")
+        mem.add_message("user", text)
+        mem.add_message("assistant", reply)
+        mem.save_history()
+
+    import lark_oapi as lark
+    from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
+
+    def do_receive(data: P2ImMessageReceiveV1) -> None:
+        try:
+            msg = data.event.message
+            chat_id = msg.chat_id
+            chat_type = msg.chat_type  # "p2p" | "group"
+            is_group = chat_type == "group"
+            content_raw = json.loads(msg.content)
+            text = content_raw.get("text", "").strip()
+            if is_group:
+                mentions = msg.mentions or []
+                bot_mentioned = any(m.name == cfg.bot_name for m in mentions)
+                if not bot_mentioned:
+                    return
+                for m in mentions:
+                    text = text.replace(f"@{m.name}", "").strip()
+            if not text:
+                return
+            sender_id = data.event.sender.sender_id.open_id
+            threading.Thread(
+                target=handle_message,
+                args=(chat_id, sender_id, text, is_group),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            print(f"消息处理异常：{e}")
+
+    print(f"✅ 飞书 Bot 启动中（{cfg.bot_name}）...")
+    cli = lark.ws.Client(
+        cfg.app_id,
+        cfg.app_secret,
+        event_handler=lark.EventDispatcherHandler.builder(
+            lark.ENCRYPT_KEY_IS_EMPTY,
+            lark.VERIFICATION_TOKEN_IS_EMPTY,
+        )
+        .register(P2ImMessageReceiveV1, do_receive)
+        .build(),
+        log_level=lark.LogLevel.ERROR,
+    )
+    cli.start()
+
+
+# ─────────────────────────────────────────────
+# 入口
+# ─────────────────────────────────────────────
+
+import argparse
+
+
+def main():
+    parser = argparse.ArgumentParser(description="feishu-claude 双模工具")
+    parser.add_argument("--mode", choices=["mcp", "bot"], default="mcp")
+    args = parser.parse_args()
+    if args.mode == "mcp":
+        run_mcp_server()
+    else:
+        run_bot()
+
+
+if __name__ == "__main__":
+    main()
