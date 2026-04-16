@@ -46,7 +46,6 @@ class Config:
 
     def ensure_dirs(self):
         workspace = os.path.join(self.work_dir, "workspace")
-        groups = os.path.join(self.work_dir, "groups")
-        os.makedirs(workspace, exist_ok=True)
-        os.makedirs(groups, exist_ok=True)
+        groups = os.path.join(workspace, "groups")   # 嵌套在 workspace 下
+        os.makedirs(groups, exist_ok=True)           # makedirs 会同时创建父目录
         return workspace

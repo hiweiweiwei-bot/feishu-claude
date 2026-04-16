@@ -27,5 +27,5 @@ def test_config_work_dir_created(tmp_path):
     cfg.save()
     cfg2 = Config(path=str(tmp_path / "config.json"))
     cfg2.ensure_dirs()
-    assert os.path.isdir(os.path.join(work, "groups"))
-    assert os.path.isdir(os.path.join(work, "workspace"))
+    assert os.path.isdir(os.path.join(work, "workspace", "groups"))  # 嵌套结构
+    assert os.path.isdir(os.path.join(work, "workspace"))            # 父目录
