@@ -49,3 +49,51 @@ class Config:
         groups = os.path.join(workspace, "groups")   # 嵌套在 workspace 下
         os.makedirs(groups, exist_ok=True)           # makedirs 会同时创建父目录
         return workspace
+
+# ─────────────────────────────────────────────
+# Memory
+# ─────────────────────────────────────────────
+
+MAX_HISTORY = 50
+
+class Memory:
+    def __init__(self, workspace: str, chat_id: str):
+        self.workspace = workspace
+        self.chat_id = chat_id
+        self.group_dir = os.path.join(workspace, "groups", chat_id)
+        os.makedirs(self.group_dir, exist_ok=True)
+        self.history_path = os.path.join(self.group_dir, "history.json")
+        self.group_memory_path = os.path.join(self.group_dir, "MEMORY.md")
+        self.history: list[dict] = self._load_history()
+
+    def _load_history(self) -> list[dict]:
+        if os.path.exists(self.history_path):
+            with open(self.history_path) as f:
+                return json.load(f)
+        return []
+
+    def add_message(self, role: str, content: str):
+        self.history.append({"role": role, "content": content})
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
+
+    def save_history(self):
+        with open(self.history_path, "w", encoding="utf-8") as f:
+            json.dump(self.history, f, ensure_ascii=False, indent=2)
+
+    def _read_file(self, path: str) -> str:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return f.read().strip()
+        return ""
+
+    def build_system_prompt(self) -> str:
+        parts = []
+        for filename in ["IDENTITY.md", "SOUL.md", "USER.md", "MEMORY.md"]:
+            content = self._read_file(os.path.join(self.workspace, filename))
+            if content:
+                parts.append(content)
+        group_mem = self._read_file(self.group_memory_path)
+        if group_mem:
+            parts.append(f"## 本群记忆\n{group_mem}")
+        return "\n\n---\n\n".join(parts)
