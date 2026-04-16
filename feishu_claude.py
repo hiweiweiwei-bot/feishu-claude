@@ -613,3 +613,107 @@ class API:
         if resp.status_code != 200 or data.get("code", 0) != 0:
             raise RuntimeError(f"API 调用失败：{data}")
         return data
+
+
+# ─────────────────────────────────────────────
+# MCP Server 模式
+# ─────────────────────────────────────────────
+
+from mcp.server.fastmcp import FastMCP
+
+
+def run_mcp_server():
+    cfg = Config()
+    auth = Auth(cfg.app_id, cfg.app_secret, cfg.proxy)
+    api = API(auth)
+    mcp = FastMCP("feishu")
+
+    @mcp.tool()
+    def feishu_auth() -> str:
+        """发起 OAuth2 用户授权（打开浏览器完成飞书登录授权）"""
+        auth.do_oauth()
+        return "授权成功"
+
+    @mcp.tool()
+    def feishu_auth_status() -> dict:
+        """查看当前身份模式和 token 状态"""
+        return api.auth_status()
+
+    @mcp.tool()
+    def feishu_switch_identity(mode: str) -> str:
+        """切换身份模式。mode: 'user'（默认，继承用户权限）或 'app'（应用身份）"""
+        return api.switch_identity(mode)
+
+    @mcp.tool()
+    def feishu_create_document(title: str, content: str = "") -> dict:
+        """创建飞书文档。返回 document_id 和分享链接"""
+        return api.create_document(title, content)
+
+    @mcp.tool()
+    def feishu_get_document(document_id: str) -> str:
+        """读取飞书文档的纯文本内容"""
+        return api.get_document(document_id)
+
+    @mcp.tool()
+    def feishu_list_documents(query: str) -> list:
+        """按关键词搜索飞书文档"""
+        return api.list_documents(query)
+
+    @mcp.tool()
+    def feishu_send_message(chat_id: str, text: str, receive_id_type: str = "chat_id") -> dict:
+        """向指定会话发送文本消息。receive_id_type: 'chat_id' 或 'open_id'"""
+        return api.send_message(chat_id, text, receive_id_type)
+
+    @mcp.tool()
+    def feishu_list_chats() -> list:
+        """列出当前用户所在的所有群聊和会话"""
+        return api.list_chats()
+
+    @mcp.tool()
+    def feishu_read_sheet(spreadsheet_token: str, sheet_id: str, range_: str) -> list:
+        """读取飞书电子表格数据。range_ 格式如 'A1:D10'"""
+        return api.read_sheet(spreadsheet_token, sheet_id, range_)
+
+    @mcp.tool()
+    def feishu_write_sheet(spreadsheet_token: str, sheet_id: str, range_: str, values: list) -> dict:
+        """写入飞书电子表格数据。values 为二维数组"""
+        return api.write_sheet(spreadsheet_token, sheet_id, range_, values)
+
+    @mcp.tool()
+    def feishu_query_records(app_token: str, table_id: str, filter_: str = "") -> list:
+        """查询多维表格（Bitable）记录。filter_ 为飞书筛选语法"""
+        return api.query_records(app_token, table_id, filter_)
+
+    @mcp.tool()
+    def feishu_create_record(app_token: str, table_id: str, fields: dict) -> dict:
+        """在多维表格中新增一条记录"""
+        return api.create_record(app_token, table_id, fields)
+
+    @mcp.tool()
+    def feishu_get_okr(user_id: str, period_id: str = "") -> dict:
+        """读取用户 OKR 完整内容（O + KR 详情）"""
+        return api.get_okr(user_id, period_id)
+
+    @mcp.tool()
+    def feishu_update_okr_progress(okr_id: str, kr_id: str, progress: float, remark: str = "") -> dict:
+        """更新 OKR 中某个 KR 的进度值和进度说明"""
+        return api.update_okr_progress(okr_id, kr_id, progress, remark)
+
+    @mcp.tool()
+    def feishu_add_okr_comment(okr_id: str, comment: str) -> dict:
+        """在 OKR 下添加评论或备注"""
+        return api.add_okr_comment(okr_id, comment)
+
+    @mcp.tool()
+    def feishu_api(module: str, method: str, params: dict) -> dict:
+        """
+        调用任意飞书 API（通用兜底工具）。
+        module: 服务路径，如 'drive.v1.file' / 'calendar.v4.calendar_event'
+        method: 操作，如 'list' / 'create' / 'delete'
+        params: 请求参数字典
+
+        示例：feishu_api('drive.v1.file', 'create_folder', {'name': '底稿', 'folder_token': 'xxx'})
+        """
+        return api.feishu_api(module, method, params)
+
+    mcp.run()
