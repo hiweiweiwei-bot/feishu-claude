@@ -318,6 +318,16 @@ class API:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.auth.get_token()}"}
 
+    def _http(self) -> "httpx.Client":
+        """返回配置了代理的 httpx.Client（上下文管理器）"""
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        return httpx.Client(proxies=proxies, timeout=30)
+
     # ── 授权 ─────────────────────────────────────
     def auth_status(self) -> dict:
         return self.auth.status()
@@ -360,13 +370,7 @@ class API:
         return resp.data.content
 
     def list_documents(self, query: str) -> list:
-        import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        with self._http() as client:
             resp = client.get(
                 "https://open.feishu.cn/open-apis/suite/docs-api/search/object",
                 headers=self._headers(),
@@ -414,13 +418,7 @@ class API:
     def read_sheet(
         self, spreadsheet_token: str, sheet_id: str, range_: str
     ) -> list:
-        import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        with self._http() as client:
             resp = client.get(
                 f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets"
                 f"/{spreadsheet_token}/values/{sheet_id}!{range_}",
@@ -438,13 +436,7 @@ class API:
         range_: str,
         values: list,
     ) -> dict:
-        import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        with self._http() as client:
             resp = client.put(
                 f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets"
                 f"/{spreadsheet_token}/values",
@@ -497,16 +489,10 @@ class API:
 
     # ── OKR ──────────────────────────────────────
     def get_okr(self, user_id: str, period_id: str = "") -> dict:
-        import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
         params: dict = {"user_id": user_id, "user_id_type": "open_id"}
         if period_id:
             params["period_ids"] = period_id
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        with self._http() as client:
             resp = client.get(
                 "https://open.feishu.cn/open-apis/okr/v1/okrs/batch_get",
                 headers=self._headers(),
@@ -524,13 +510,7 @@ class API:
         progress: float,
         remark: str = "",
     ) -> dict:
-        import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        with self._http() as client:
             resp = client.patch(
                 "https://open.feishu.cn/open-apis/okr/v1/progress_records",
                 headers={**self._headers(), "Content-Type": "application/json"},
@@ -561,13 +541,7 @@ class API:
         return data
 
     def add_okr_comment(self, okr_id: str, comment: str) -> dict:
-        import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        with self._http() as client:
             resp = client.post(
                 f"https://open.feishu.cn/open-apis/okr/v1/okrs/{okr_id}/progress_records",
                 headers={**self._headers(), "Content-Type": "application/json"},
@@ -606,7 +580,6 @@ class API:
             feishu_api("drive.v1.file", "create_folder",
                        {"name": "投研底稿", "folder_token": "xxx"})
         """
-        import httpx
         parts = module.split(".")
         if len(parts) < 3:
             raise ValueError(
@@ -616,17 +589,20 @@ class API:
         resource = "/".join(parts[2:])
         url = f"https://open.feishu.cn/open-apis/{service}/{version}/{resource}"
         GET_METHODS = {"list", "get", "batch_get", "search"}
-        http_method = "GET" if method in GET_METHODS else "POST"
-        if method in ("update", "patch"):
+        PUT_METHODS = {"put", "update_all"}
+        PATCH_METHODS = {"update", "patch"}
+        DELETE_METHODS = {"delete"}
+        if method in GET_METHODS:
+            http_method = "GET"
+        elif method in PUT_METHODS:
+            http_method = "PUT"
+        elif method in PATCH_METHODS:
             http_method = "PATCH"
-        elif method in ("delete",):
+        elif method in DELETE_METHODS:
             http_method = "DELETE"
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        with httpx.Client(proxies=proxies, timeout=30) as client:
+        else:
+            http_method = "POST"
+        with self._http() as client:
             if http_method == "GET":
                 resp = client.get(url, headers=self._headers(), params=params)
             else:
