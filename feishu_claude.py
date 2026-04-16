@@ -68,8 +68,11 @@ class Memory:
 
     def _load_history(self) -> list[dict]:
         if os.path.exists(self.history_path):
-            with open(self.history_path) as f:
-                return json.load(f)
+            try:
+                with open(self.history_path, encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                return []
         return []
 
     def add_message(self, role: str, content: str):

@@ -43,3 +43,21 @@ def test_group_memory_isolated(tmp_path):
     m2r = Memory(str(tmp_path), "chat_B")
     assert m1r.history[0]["content"] == "A 群消息"
     assert m2r.history[0]["content"] == "B 群消息"
+
+def test_group_dirs_are_isolated(tmp_path):
+    m1 = Memory(str(tmp_path), "chat_A")
+    m2 = Memory(str(tmp_path), "chat_B")
+    assert m1.group_dir != m2.group_dir
+    assert "chat_A" in m1.group_dir
+    assert "chat_B" in m2.group_dir
+
+def test_build_system_prompt_includes_group_memory(tmp_path):
+    workspace = str(tmp_path)
+    group_mem_path = os.path.join(workspace, "groups", "chat_001", "MEMORY.md")
+    os.makedirs(os.path.dirname(group_mem_path), exist_ok=True)
+    with open(group_mem_path, "w") as f:
+        f.write("群内记住：用户叫Franco")
+    m = Memory(workspace, "chat_001")
+    prompt = m.build_system_prompt()
+    assert "群内记住：用户叫Franco" in prompt
+    assert "## 本群记忆" in prompt
