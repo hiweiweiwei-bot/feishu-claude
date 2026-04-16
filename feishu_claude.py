@@ -278,3 +278,343 @@ class Auth:
             "user_token_expires_in": max(0, int(expire - time.time())) if has_user else 0,
             "has_refresh_token": bool(self._tokens.get("refresh_token")),
         }
+
+
+# ─────────────────────────────────────────────
+# API（lark-oapi 封装）
+# ─────────────────────────────────────────────
+
+import lark_oapi as lark
+from lark_oapi.api.im.v1 import (
+    CreateMessageRequest, CreateMessageRequestBody,
+    ListChatRequest,
+)
+from lark_oapi.api.docx.v1 import (
+    CreateDocumentRequest, CreateDocumentRequestBody,
+    RawContentDocumentRequest,
+)
+from lark_oapi.api.bitable.v1 import (
+    ListAppTableRecordRequest, CreateAppTableRecordRequest,
+    AppTableRecord,
+)
+
+
+class API:
+    def __init__(self, auth: "Auth"):
+        self.auth = auth
+
+    def _get_client(self) -> lark.Client:
+        """每次调用前重新获取 token，确保不过期"""
+        builder = (
+            lark.Client.builder()
+            .app_id(self.auth.app_id)
+            .app_secret(self.auth.app_secret)
+            .log_level(lark.LogLevel.ERROR)
+        )
+        if self.auth.proxy:
+            builder = builder.http_host(self.auth.proxy)
+        return builder.build()
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.auth.get_token()}"}
+
+    # ── 授权 ─────────────────────────────────────
+    def auth_status(self) -> dict:
+        return self.auth.status()
+
+    def switch_identity(self, mode: str) -> str:
+        self.auth.switch_identity(mode)
+        return f"已切换到 {mode} 身份"
+
+    # ── 文档 ─────────────────────────────────────
+    def create_document(self, title: str, content: str = "") -> dict:
+        client = self._get_client()
+        req = (
+            CreateDocumentRequest.builder()
+            .request_body(
+                CreateDocumentRequestBody.builder()
+                .title(title)
+                .folder_token("")
+                .build()
+            )
+            .build()
+        )
+        resp = client.docx.v1.document.create(req)
+        if not resp.success():
+            raise RuntimeError(f"创建文档失败：{resp.msg}")
+        return {
+            "document_id": resp.data.document.document_id,
+            "url": resp.data.document.share_url,
+        }
+
+    def get_document(self, document_id: str) -> str:
+        client = self._get_client()
+        req = (
+            RawContentDocumentRequest.builder()
+            .document_id(document_id)
+            .build()
+        )
+        resp = client.docx.v1.document.raw_content(req)
+        if not resp.success():
+            raise RuntimeError(f"读取文档失败：{resp.msg}")
+        return resp.data.content
+
+    def list_documents(self, query: str) -> list:
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            resp = client.get(
+                "https://open.feishu.cn/open-apis/suite/docs-api/search/object",
+                headers=self._headers(),
+                params={"query": query, "count": 20, "offset": 0},
+            )
+        return resp.json().get("data", {}).get("docs_entities", [])
+
+    # ── 消息 ─────────────────────────────────────
+    def send_message(
+        self, chat_id: str, text: str, receive_id_type: str = "chat_id"
+    ) -> dict:
+        client = self._get_client()
+        req = (
+            CreateMessageRequest.builder()
+            .receive_id_type(receive_id_type)
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("text")
+                .content(json.dumps({"text": text}, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        resp = client.im.v1.message.create(req)
+        if not resp.success():
+            raise RuntimeError(f"发送消息失败：{resp.msg}")
+        return {"message_id": resp.data.message_id}
+
+    def list_chats(self) -> list:
+        client = self._get_client()
+        req = ListChatRequest.builder().page_size(50).build()
+        resp = client.im.v1.chat.list(req)
+        if not resp.success():
+            raise RuntimeError(f"获取群聊失败：{resp.msg}")
+        return [
+            {"chat_id": c.chat_id, "name": c.name}
+            for c in (resp.data.items or [])
+        ]
+
+    # ── 表格 ─────────────────────────────────────
+    def read_sheet(
+        self, spreadsheet_token: str, sheet_id: str, range_: str
+    ) -> list:
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            resp = client.get(
+                f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets"
+                f"/{spreadsheet_token}/values/{sheet_id}!{range_}",
+                headers=self._headers(),
+            )
+        return (
+            resp.json().get("data", {}).get("valueRange", {}).get("values", [])
+        )
+
+    def write_sheet(
+        self,
+        spreadsheet_token: str,
+        sheet_id: str,
+        range_: str,
+        values: list,
+    ) -> dict:
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            resp = client.put(
+                f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets"
+                f"/{spreadsheet_token}/values",
+                headers=self._headers(),
+                json={
+                    "valueRange": {
+                        "range": f"{sheet_id}!{range_}",
+                        "values": values,
+                    }
+                },
+            )
+        return resp.json()
+
+    # ── Bitable ───────────────────────────────────
+    def query_records(
+        self, app_token: str, table_id: str, filter_: str = ""
+    ) -> list:
+        client = self._get_client()
+        builder = (
+            ListAppTableRecordRequest.builder()
+            .app_token(app_token)
+            .table_id(table_id)
+            .page_size(100)
+        )
+        if filter_:
+            builder = builder.filter(filter_)
+        resp = client.bitable.v1.app_table_record.list(builder.build())
+        if not resp.success():
+            raise RuntimeError(f"查询记录失败：{resp.msg}")
+        return [r.fields for r in (resp.data.items or [])]
+
+    def create_record(
+        self, app_token: str, table_id: str, fields: dict
+    ) -> dict:
+        client = self._get_client()
+        req = (
+            CreateAppTableRecordRequest.builder()
+            .app_token(app_token)
+            .table_id(table_id)
+            .request_body(AppTableRecord.builder().fields(fields).build())
+            .build()
+        )
+        resp = client.bitable.v1.app_table_record.create(req)
+        if not resp.success():
+            raise RuntimeError(f"创建记录失败：{resp.msg}")
+        return {"record_id": resp.data.record.record_id}
+
+    # ── OKR ──────────────────────────────────────
+    def get_okr(self, user_id: str, period_id: str = "") -> dict:
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        params: dict = {"user_id": user_id, "user_id_type": "open_id"}
+        if period_id:
+            params["period_ids"] = period_id
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            resp = client.get(
+                "https://open.feishu.cn/open-apis/okr/v1/okrs/batch_get",
+                headers=self._headers(),
+                params=params,
+            )
+        return resp.json().get("data", {})
+
+    def update_okr_progress(
+        self,
+        okr_id: str,
+        kr_id: str,
+        progress: float,
+        remark: str = "",
+    ) -> dict:
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            resp = client.patch(
+                "https://open.feishu.cn/open-apis/okr/v1/progress_records",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={
+                    "source_type": 2,
+                    "target_id": kr_id,
+                    "metric_current_value": progress,
+                    "content": {
+                        "blocks": [
+                            {
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "elements": [
+                                        {
+                                            "type": "textRun",
+                                            "textRun": {"text": remark},
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                },
+            )
+        return resp.json()
+
+    def add_okr_comment(self, okr_id: str, comment: str) -> dict:
+        import httpx
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            resp = client.post(
+                f"https://open.feishu.cn/open-apis/okr/v1/okrs/{okr_id}/progress_records",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={
+                    "content": {
+                        "blocks": [
+                            {
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "elements": [
+                                        {
+                                            "type": "textRun",
+                                            "textRun": {"text": comment},
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    }
+                },
+            )
+        return resp.json()
+
+    # ── 通用工具（全量兜底）──────────────────────
+    def feishu_api(self, module: str, method: str, params: dict) -> dict:
+        """
+        调用任意飞书 API（HTTP fallback 方式）。
+        module: 'service.version.resource'，如 'im.v1.message' / 'drive.v1.file'
+        method: 'list' / 'create' / 'get' / 'update' / 'delete'
+        params: 请求参数字典
+
+        示例：
+            feishu_api("drive.v1.file", "create_folder",
+                       {"name": "投研底稿", "folder_token": "xxx"})
+        """
+        import httpx
+        parts = module.split(".")
+        if len(parts) < 3:
+            raise ValueError(
+                "module 格式应为 'service.version.resource'，如 'im.v1.message'"
+            )
+        service, version = parts[0], parts[1]
+        resource = "/".join(parts[2:])
+        url = f"https://open.feishu.cn/open-apis/{service}/{version}/{resource}"
+        GET_METHODS = {"list", "get", "batch_get", "search"}
+        http_method = "GET" if method in GET_METHODS else "POST"
+        if method in ("update", "patch"):
+            http_method = "PATCH"
+        elif method in ("delete",):
+            http_method = "DELETE"
+        proxies = (
+            {"https://": self.auth.proxy, "http://": self.auth.proxy}
+            if self.auth.proxy
+            else None
+        )
+        with httpx.Client(proxies=proxies, timeout=30) as client:
+            if http_method == "GET":
+                resp = client.get(url, headers=self._headers(), params=params)
+            else:
+                resp = client.request(
+                    http_method, url, headers=self._headers(), json=params
+                )
+        return resp.json()
