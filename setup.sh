@@ -37,6 +37,18 @@ info "前置条件检查通过"
 # ── Step 2: 收集配置 ─────────────────────────
 echo "Step 2/7: 配置信息..."
 
+# 如果已有 config.json，自动读取原有值（升级时无需重新输入）
+EXISTING_CONFIG="$INSTALL_DIR/config.json"
+if [ -f "$EXISTING_CONFIG" ]; then
+    warn "检测到已有配置文件，自动读取原有 App ID / Secret（升级模式）"
+    _read_cfg() { "$PYTHON3" -c "import json; d=json.load(open('$EXISTING_CONFIG')); print(d.get('$1',''))" 2>/dev/null || echo ""; }
+    [ -z "$FEISHU_APP_ID" ]     && FEISHU_APP_ID=$(_read_cfg app_id)
+    [ -z "$FEISHU_APP_SECRET" ] && FEISHU_APP_SECRET=$(_read_cfg app_secret)
+    [ -z "$FEISHU_PROXY" ]      && FEISHU_PROXY=$(_read_cfg proxy)
+    [ -z "$FEISHU_BOT_NAME" ]   && FEISHU_BOT_NAME=$(_read_cfg bot_name)
+    [ -z "$FEISHU_BOT_INTRO" ]  && FEISHU_BOT_INTRO=$(_read_cfg bot_intro)
+fi
+
 if [ -z "$FEISHU_APP_ID" ]; then
     echo "请输入飞书 App ID（https://open.feishu.cn/app 获取）："
     read -r FEISHU_APP_ID
