@@ -783,7 +783,6 @@ def run_bot():
     _api = API(_auth)
 
     # 消息去重：缓存最近处理的 message_id（防止 WebSocket 重发）
-    import tempfile
     _seen_msg_ids: set = set()
     _SEEN_MAX = 200
 
@@ -802,35 +801,25 @@ def run_bot():
         env = os.environ.copy()
         if cfg.proxy:
             env["HTTPS_PROXY"] = cfg.proxy
-        # 写临时文件避免超过 shell 参数长度限制（Windows ~32KB）
-        prompt_file = None
+        # 短 prompt 走命令行参数，长 prompt 走 stdin 管道（避免 Windows 32KB 限制）
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".txt", encoding="utf-8", delete=False
-            ) as f:
-                f.write(full_prompt)
-                prompt_file = f.name
-            result = subprocess.run(
-                [claude_bin, "-p", f"$(cat {prompt_file})" if os.name != "nt"
-                 else full_prompt[:30000],  # Windows fallback: truncate
-                 "--output-format", "text"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env=env,
-                stdin=open(prompt_file, encoding="utf-8") if os.name == "nt" else None,
-            )
+            if len(full_prompt.encode("utf-8")) < 30000:
+                result = subprocess.run(
+                    [claude_bin, "-p", full_prompt, "--output-format", "text"],
+                    capture_output=True, text=True, timeout=120, env=env,
+                )
+            else:
+                # stdin 管道：claude 会合并 stdin 内容和 -p 参数
+                result = subprocess.run(
+                    [claude_bin, "-p", "--output-format", "text"],
+                    input=full_prompt,
+                    capture_output=True, text=True, timeout=120, env=env,
+                )
             return result.stdout.strip() or result.stderr.strip() or "（无回复）"
         except subprocess.TimeoutExpired:
             return "⏱ 回复超时（120秒），请重试"
         except Exception as e:
             return f"❌ 调用 Claude 失败：{e}"
-        finally:
-            if prompt_file:
-                try:
-                    os.unlink(prompt_file)
-                except OSError:
-                    pass
 
     def handle_message(chat_id: str, sender_id: str, text: str, is_group: bool):
         mem = Memory(workspace, chat_id)
