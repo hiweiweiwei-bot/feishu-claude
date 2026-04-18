@@ -4,6 +4,12 @@
 import json, os
 from pathlib import Path
 
+
+# Windows encoding fix
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"): _sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(_sys.stderr, "reconfigure"): _sys.stderr.reconfigure(encoding="utf-8")
+
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
@@ -121,7 +127,7 @@ OAUTH_SCOPES = " ".join([
     "sheets:spreadsheet", "drive:drive", "search:docs:read",
     "bitable:app", "bitable:app:readonly",
     "task:task:write", "calendar:calendar:readonly",
-    "okr:okr:readonly", "okr:okr:write",
+    "okr:okr:readonly",
 ])
 
 class _OAuthHandler(BaseHTTPRequestHandler):
@@ -143,8 +149,10 @@ class Auth:
         self._identity = "user"  # "user" | "app"
 
     def _http(self) -> httpx.Client:
-        proxies = {"https://": self.proxy, "http://": self.proxy} if self.proxy else None
-        return httpx.Client(proxies=proxies, timeout=30)
+        kwargs = {"timeout": 30}
+        if self.proxy:
+            kwargs["proxy"] = self.proxy  # httpx 0.28+ uses 'proxy' instead of 'proxies'
+        return httpx.Client(**kwargs)
 
     def _load_tokens(self) -> dict:
         if os.path.exists(TOKEN_PATH):
@@ -160,7 +168,7 @@ class Auth:
         try:
             with open(tmp, "w") as f:
                 json.dump(self._tokens, f, indent=2)
-            os.chmod(tmp, 0o600)
+            os.chmod(tmp, 0o600) if os.name != "nt" else None
             os.replace(tmp, TOKEN_PATH)  # POSIX 原子操作
         except OSError as e:
             warnings.warn(f"token 持久化失败（本次会话仍有效）：{e}")
