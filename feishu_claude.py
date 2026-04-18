@@ -29,7 +29,7 @@ class Config:
 
     def _load(self):
         if os.path.exists(self.path):
-            with open(self.path) as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             self.app_id = data.get("app_id", self.app_id)
             self.app_secret = data.get("app_secret", self.app_secret)
@@ -87,8 +87,10 @@ class Memory:
             self.history = self.history[-MAX_HISTORY:]
 
     def save_history(self):
-        with open(self.history_path, "w", encoding="utf-8") as f:
+        tmp = self.history_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.history, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.history_path)
 
     def _read_file(self, path: str) -> str:
         if os.path.exists(path):
@@ -178,8 +180,8 @@ class Auth:
                 pass
 
     # ── OAuth2 用户授权 ──────────────────────────
-    def do_oauth(self):
-        """打开浏览器完成 OAuth2 授权，获取 user_access_token"""
+    def do_oauth(self, timeout: int = 300):
+        """打开浏览器完成 OAuth2 授权，获取 user_access_token。timeout 秒后放弃。"""
         auth_url = (
             f"https://open.feishu.cn/open-apis/authen/v1/authorize"
             f"?app_id={self.app_id}"
@@ -187,13 +189,36 @@ class Auth:
             f"&scope={urllib.parse.quote(OAUTH_SCOPES)}"
             f"&state=feishu-claude"
         )
-        server = HTTPServer(("localhost", OAUTH_PORT), _OAuthHandler)
+        # 尝试绑定端口，失败则自动找可用端口
+        port = OAUTH_PORT
+        for attempt in range(3):
+            try:
+                server = HTTPServer(("localhost", port), _OAuthHandler)
+                break
+            except OSError:
+                port += 1
+        else:
+            raise RuntimeError(f"端口 {OAUTH_PORT}-{port} 均被占用，无法启动 OAuth 回调服务")
+        if port != OAUTH_PORT:
+            # 动态修正 redirect_uri
+            redirect_uri = f"http://localhost:{port}/callback"
+            auth_url = auth_url.replace(
+                urllib.parse.quote(REDIRECT_URI),
+                urllib.parse.quote(redirect_uri),
+            )
+            warnings.warn(f"端口 {OAUTH_PORT} 被占用，改用 {port}（需确保飞书后台也配置了此端口）")
         server.auth_code = None
+        server.timeout = 10  # handle_request 单次超时
         print(f"\n正在打开浏览器授权，若未自动打开请手动访问：\n{auth_url}\n")
         webbrowser.open(auth_url)
+        deadline = time.time() + timeout
         while not server.auth_code:
+            if time.time() > deadline:
+                server.server_close()
+                raise RuntimeError(f"OAuth 授权超时（{timeout}秒），请重试")
             server.handle_request()
         code = server.auth_code
+        server.server_close()
         if not code:
             raise RuntimeError("未获取到授权码，请重试")
         self._exchange_code(code)
@@ -224,7 +249,9 @@ class Auth:
 
     def _refresh_user_token(self):
         if not self._tokens.get("refresh_token"):
-            raise RuntimeError("refresh_token 不存在，请重新执行 OAuth2 授权")
+            raise RuntimeError(
+                "refresh_token 不存在，请调用 feishu_auth 工具重新授权"
+            )
         with self._http() as client:
             resp = client.post(
                 "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
@@ -237,7 +264,16 @@ class Auth:
             )
         data = resp.json()
         if "access_token" not in data:
-            raise RuntimeError(f"token 刷新失败：{data}")
+            # refresh_token 过期（30天），清除旧 token 并提示重新授权
+            self._tokens.pop("user_access_token", None)
+            self._tokens.pop("refresh_token", None)
+            self._tokens.pop("user_token_expire", None)
+            self._save_tokens()
+            raise RuntimeError(
+                "token 刷新失败（refresh_token 可能已过期），"
+                "请调用 feishu_auth 工具重新授权。"
+                f"\n原始错误：{data}"
+            )
         self._store_user_tokens(data)
 
     # ── 应用身份 token ────────────────────────────
@@ -312,7 +348,10 @@ class API:
         self.auth = auth
 
     def _get_client(self) -> lark.Client:
-        """每次调用前重新获取 token，确保不过期"""
+        """获取 lark SDK client。
+        注意：SDK client 始终使用 tenant_access_token（应用身份），
+        不受 switch_identity 影响。用户身份的 API 调用走 _http() + _headers()。
+        """
         builder = (
             lark.Client.builder()
             .app_id(self.auth.app_id)
@@ -329,12 +368,10 @@ class API:
     def _http(self) -> "httpx.Client":
         """返回配置了代理的 httpx.Client（上下文管理器）"""
         import httpx
-        proxies = (
-            {"https://": self.auth.proxy, "http://": self.auth.proxy}
-            if self.auth.proxy
-            else None
-        )
-        return httpx.Client(proxies=proxies, timeout=30)
+        kwargs = {"timeout": 30}
+        if self.auth.proxy:
+            kwargs["proxy"] = self.auth.proxy  # httpx 0.28+ uses 'proxy'
+        return httpx.Client(**kwargs)
 
     # ── 授权 ─────────────────────────────────────
     def auth_status(self) -> dict:
@@ -741,6 +778,15 @@ def run_bot():
     workspace = os.path.join(cfg.work_dir, "workspace")
     cfg.ensure_dirs()
 
+    # 单例 Auth/API，避免每条消息重建连接和重读 token 文件
+    _auth = Auth(cfg.app_id, cfg.app_secret, cfg.proxy)
+    _api = API(_auth)
+
+    # 消息去重：缓存最近处理的 message_id（防止 WebSocket 重发）
+    import tempfile
+    _seen_msg_ids: set = set()
+    _SEEN_MAX = 200
+
     def call_claude(system_prompt: str, history: list, user_msg: str) -> str:
         claude_bin = shutil.which("claude")
         if not claude_bin:
@@ -756,28 +802,42 @@ def run_bot():
         env = os.environ.copy()
         if cfg.proxy:
             env["HTTPS_PROXY"] = cfg.proxy
+        # 写临时文件避免超过 shell 参数长度限制（Windows ~32KB）
+        prompt_file = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", encoding="utf-8", delete=False
+            ) as f:
+                f.write(full_prompt)
+                prompt_file = f.name
             result = subprocess.run(
-                [claude_bin, "-p", full_prompt, "--output-format", "text"],
+                [claude_bin, "-p", f"$(cat {prompt_file})" if os.name != "nt"
+                 else full_prompt[:30000],  # Windows fallback: truncate
+                 "--output-format", "text"],
                 capture_output=True,
                 text=True,
                 timeout=120,
                 env=env,
+                stdin=open(prompt_file, encoding="utf-8") if os.name == "nt" else None,
             )
             return result.stdout.strip() or result.stderr.strip() or "（无回复）"
         except subprocess.TimeoutExpired:
             return "⏱ 回复超时（120秒），请重试"
         except Exception as e:
             return f"❌ 调用 Claude 失败：{e}"
+        finally:
+            if prompt_file:
+                try:
+                    os.unlink(prompt_file)
+                except OSError:
+                    pass
 
     def handle_message(chat_id: str, sender_id: str, text: str, is_group: bool):
         mem = Memory(workspace, chat_id)
         system_prompt = mem.build_system_prompt()
         reply = call_claude(system_prompt, mem.history, text)
-        auth = Auth(cfg.app_id, cfg.app_secret, cfg.proxy)
-        api = API(auth)
         try:
-            api.send_message(chat_id, reply)
+            _api.send_message(chat_id, reply)
         except Exception as e:
             print(f"发送失败：{e}")
         mem.add_message("user", text)
@@ -790,6 +850,17 @@ def run_bot():
     def do_receive(data: P2ImMessageReceiveV1) -> None:
         try:
             msg = data.event.message
+            # 消息去重
+            msg_id = getattr(msg, "message_id", None)
+            if msg_id:
+                if msg_id in _seen_msg_ids:
+                    return
+                _seen_msg_ids.add(msg_id)
+                if len(_seen_msg_ids) > _SEEN_MAX:
+                    # 保留最近一半
+                    to_remove = list(_seen_msg_ids)[:_SEEN_MAX // 2]
+                    for mid in to_remove:
+                        _seen_msg_ids.discard(mid)
             chat_id = msg.chat_id
             chat_type = msg.chat_type  # "p2p" | "group"
             is_group = chat_type == "group"
