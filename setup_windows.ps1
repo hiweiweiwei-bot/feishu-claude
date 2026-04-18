@@ -168,7 +168,8 @@ $config = @{
     bot_name   = $BotName
     bot_intro  = $BotIntro
 } | ConvertTo-Json -Depth 3
-Set-Content -Path $configPath -Value $config -Encoding UTF8
+# Write without BOM (PowerShell 5.x UTF8 adds BOM which breaks Python json.load)
+[IO.File]::WriteAllText($configPath, $config, [System.Text.UTF8Encoding]::new($false))
 Write-Ok "config.json written"
 
 # Deploy workspace templates (only if not exists)
@@ -216,7 +217,7 @@ if (-not (Test-Path $settingsDir)) {
     New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
 }
 if (-not (Test-Path $CLAUDE_SETTINGS)) {
-    Set-Content -Path $CLAUDE_SETTINGS -Value '{}' -Encoding UTF8
+    [IO.File]::WriteAllText($CLAUDE_SETTINGS, '{}', [System.Text.UTF8Encoding]::new($false))
 }
 
 $mcpScript = @"
