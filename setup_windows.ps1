@@ -108,9 +108,9 @@ if (-not (Test-Path $VENV)) {
 $env:ALL_PROXY = ""
 $env:HTTPS_PROXY = ""
 $env:HTTP_PROXY = ""
-$MIRROR = "-i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
-& $PYTHON -m pip install --upgrade pip -q $MIRROR.Split(" ") 2>$null
-& $PYTHON -m pip install lark-oapi "mcp[cli]>=1.2,<1.27" httpx pysocks $MIRROR.Split(" ")
+$MIRROR_ARGS = @("-i", "https://pypi.tuna.tsinghua.edu.cn/simple", "--trusted-host", "pypi.tuna.tsinghua.edu.cn")
+& $PYTHON -m pip install --upgrade pip -q @MIRROR_ARGS 2>$null
+& $PYTHON -m pip install lark-oapi "mcp[cli]>=1.2,<1.27" httpx pysocks @MIRROR_ARGS
 Write-Ok "Dependencies installed"
 
 # ── Step 4: Deploy files ──────────────────────────────────────────
